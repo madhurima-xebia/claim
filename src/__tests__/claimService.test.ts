@@ -1,3 +1,4 @@
+import { describe, beforeEach, it } from "node:test";
 import { ClaimService } from "../services/claimService";
 import { ClaimType, ClaimStatus, IClaim } from "../types/claim";
 import { ValidationError } from "../utils/validation";
@@ -330,4 +331,8 @@ describe("ClaimService", () => {
     });
   });
 });
+
+function expect(claim: IClaim) {
+  throw new Error("Function not implemented.");
+}
 
