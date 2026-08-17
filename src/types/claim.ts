@@ -41,3 +41,26 @@ export interface ICreateClaimRequest {
   claimType: ClaimType;
   claimAmount: number;
 }
+
+/**
+ * Interface for editing/updating claim details
+ */
+export interface IEditClaimRequest {
+  claimantName?: string;
+  policyNumber?: string;
+  claimAmount?: number;
+}
+
+/**
+ * Interface for updating claim status
+ */
+export interface IUpdateClaimStatusRequest {
+  status: ClaimStatus;
+}
+
+/**
+ * Interface for approving a claim
+ */
+export interface IApprovClaimRequest {
+  approvalNotes?: string;
+}
