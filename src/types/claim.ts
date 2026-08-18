@@ -30,6 +30,12 @@ export interface IClaim {
   status: ClaimStatus;
   createdAt: Date;
   updatedAt: Date;
+  userId?: string; // User who created the claim
+  approvedBy?: string; // Admin who approved the claim
+  approvalDate?: Date; // When the claim was approved
+  rejectionReason?: string; // Reason for rejection if rejected
+  adjustedAmount?: number; // Adjusted claim amount by admin
+  adjustmentNotes?: string; // Notes about the adjustment
 }
 
 /**
@@ -63,4 +69,19 @@ export interface IUpdateClaimStatusRequest {
  */
 export interface IApprovClaimRequest {
   approvalNotes?: string;
+}
+
+/**
+ * Interface for rejecting a claim
+ */
+export interface IRejectClaimRequest {
+  rejectionReason: string;
+}
+
+/**
+ * Interface for adjusting a claim
+ */
+export interface IAdjustClaimRequest {
+  adjustedAmount: number;
+  adjustmentNotes?: string;
 }

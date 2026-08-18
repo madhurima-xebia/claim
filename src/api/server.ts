@@ -2,12 +2,22 @@ import express, { Express, Request, Response } from "express";
 import path from "path";
 import swaggerUi from "swagger-ui-express";
 import { ClaimService } from "../services/claimService";
+import { UserService } from "../services/userService";
 import { ClaimType, ClaimStatus } from "../types/claim";
+import { UserRole, Permission } from "../types/user";
 import { ValidationError } from "../utils/validation";
+import {
+  authMiddleware,
+  requirePermission,
+  requireRole,
+  generateAuthToken,
+  AuthenticatedRequest,
+} from "../middleware/auth";
 
 const app: Express = express();
 const PORT = process.env.PORT || 3000;
 const claimService = new ClaimService();
+const userService = new UserService();
 
 // Middleware
 app.use(express.json());
@@ -19,7 +29,7 @@ app.use(express.static(path.join(__dirname, "../../public")));
 // CORS middleware
 app.use((req: Request, res: Response, next) => {
   res.header("Access-Control-Allow-Origin", "*");
-  res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept");
+  res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization");
   res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
   if (req.method === "OPTIONS") {
     res.sendStatus(200);
@@ -33,8 +43,8 @@ const swaggerDocument = {
   openapi: "3.0.0",
   info: {
     title: "Claim Management API",
-    description: "API for managing insurance claims",
-    version: "1.0.0",
+    description: "API for managing insurance claims with authentication and admin features",
+    version: "2.0.0",
   },
   servers: [
     {
@@ -42,251 +52,44 @@ const swaggerDocument = {
       description: "Current server",
     },
   ],
-  paths: {
-    "/api/claims": {
-      post: {
-        summary: "Create a new claim",
-        requestBody: {
-          required: true,
-          content: {
-            "application/json": {
-              schema: {
-                type: "object",
-                required: [
-                  "claimantName",
-                  "policyNumber",
-                  "claimType",
-                  "claimAmount",
-                ],
-                properties: {
-                  claimantName: {
-                    type: "string",
-                    example: "John Doe",
-                    description: "Name of the claimant (min 2 characters)",
-                  },
-                  policyNumber: {
-                    type: "string",
-                    example: "POL-2024-001",
-                    description: "Policy number",
-                  },
-                  claimType: {
-                    type: "string",
-                    enum: ["Auto", "Property", "Health"],
-                    example: "Auto",
-                    description: "Type of claim",
-                  },
-                  claimAmount: {
-                    type: "number",
-                    example: 5000,
-                    description: "Claim amount (must be greater than 0)",
-                  },
-                },
-              },
-            },
-          },
-        },
-        responses: {
-          201: {
-            description: "Claim created successfully",
-            content: {
-              "application/json": {
-                schema: {
-                  type: "object",
-                  properties: {
-                    success: { type: "boolean" },
-                    data: {
-                      type: "object",
-                      properties: {
-                        claimId: { type: "string" },
-                        claimantName: { type: "string" },
-                        policyNumber: { type: "string" },
-                        claimType: { type: "string" },
-                        claimAmount: { type: "number" },
-                        status: { type: "string" },
-                        createdAt: { type: "string" },
-                        updatedAt: { type: "string" },
-                      },
-                    },
-                  },
-                },
-              },
-            },
-          },
-          400: {
-            description: "Validation error",
-          },
-        },
-      },
-      get: {
-        summary: "Get all claims",
-        responses: {
-          200: {
-            description: "List of all claims",
-          },
-        },
-      },
-    },
-    "/api/claims/{claimId}": {
-      get: {
-        summary: "Get claim by ID",
-        parameters: [
-          {
-            name: "claimId",
-            in: "path",
-            required: true,
-            schema: { type: "string" },
-          },
-        ],
-        responses: {
-          200: { description: "Claim found" },
-          404: { description: "Claim not found" },
-        },
-      },
-      put: {
-        summary: "Update claim (edit details or status)",
-        parameters: [
-          {
-            name: "claimId",
-            in: "path",
-            required: true,
-            schema: { type: "string" },
-          },
-        ],
-        requestBody: {
-          required: true,
-          content: {
-            "application/json": {
-              schema: {
-                type: "object",
-                properties: {
-                  status: {
-                    type: "string",
-                    enum: [
-                      "Initiated",
-                      "Pending",
-                      "Approved",
-                      "Rejected",
-                      "Closed",
-                    ],
-                    description: "Update claim status",
-                  },
-                  claimantName: {
-                    type: "string",
-                    description: "Update claimant name",
-                  },
-                  policyNumber: {
-                    type: "string",
-                    description: "Update policy number",
-                  },
-                  claimAmount: {
-                    type: "number",
-                    description: "Update claim amount",
-                  },
-                },
-              },
-            },
-          },
-        },
-        responses: {
-          200: { description: "Claim updated successfully" },
-          400: { description: "Validation error" },
-          404: { description: "Claim not found" },
-        },
-      },
-    },
-    "/api/claims/{claimId}/approve": {
-      put: {
-        summary: "Approve a claim",
-        parameters: [
-          {
-            name: "claimId",
-            in: "path",
-            required: true,
-            schema: { type: "string" },
-          },
-        ],
-        responses: {
-          200: { description: "Claim approved successfully" },
-          404: { description: "Claim not found" },
-        },
-      },
-    },
-    "/api/claims/{claimId}/reject": {
-      put: {
-        summary: "Reject a claim",
-        parameters: [
-          {
-            name: "claimId",
-            in: "path",
-            required: true,
-            schema: { type: "string" },
-          },
-        ],
-        responses: {
-          200: { description: "Claim rejected successfully" },
-          404: { description: "Claim not found" },
-        },
-      },
-    },
-    "/api/claims/policy/{policyNumber}": {
-      get: {
-        summary: "Get claims by policy number",
-        parameters: [
-          {
-            name: "policyNumber",
-            in: "path",
-            required: true,
-            schema: { type: "string" },
-          },
-        ],
-        responses: {
-          200: { description: "List of claims for the policy" },
-        },
-      },
-    },
-    "/api/claims/claimant/{claimantName}": {
-      get: {
-        summary: "Get claims by claimant name",
-        parameters: [
-          {
-            name: "claimantName",
-            in: "path",
-            required: true,
-            schema: { type: "string" },
-          },
-        ],
-        responses: {
-          200: { description: "List of claims for the claimant" },
-        },
+  components: {
+    securitySchemes: {
+      bearerAuth: {
+        type: "http",
+        scheme: "bearer",
       },
     },
   },
+  paths: {},
 };
 
-app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerDocument, {
-  swaggerOptions: {
-    urls: [
-      {
-        url: "/swagger.json",
-        name: "Claim API"
-      }
-    ],
-    deepLinking: true
-  }
-}));
+app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerDocument));
 
 // Serve swagger spec as JSON
 app.get("/swagger.json", (req: Request, res: Response) => {
   res.json(swaggerDocument);
 });
 
-// Routes
+// ==================== Authentication Routes ====================
 
-// Create a new claim
-app.post("/api/claims", (req: Request, res: Response) => {
+// Register
+app.post("/api/auth/register", (req: Request, res: Response) => {
   try {
-    const claim = claimService.initiateClaim(req.body);
-    res.status(201).json({ success: true, data: claim });
+    const user = userService.register(req.body);
+    const token = generateAuthToken(user.userId, user.username);
+
+    res.status(201).json({
+      success: true,
+      message: "User registered successfully",
+      user: {
+        userId: user.userId,
+        username: user.username,
+        email: user.email,
+        fullName: user.fullName,
+        role: user.role,
+      },
+      token,
+    });
   } catch (error) {
     if (error instanceof ValidationError) {
       res.status(400).json({ success: false, error: error.message });
@@ -296,95 +99,301 @@ app.post("/api/claims", (req: Request, res: Response) => {
   }
 });
 
-// Get all claims
-app.get("/api/claims", (req: Request, res: Response) => {
-  const claims = claimService.getAllClaims();
-  res.json({ success: true, data: claims });
-});
+// Login
+app.post("/api/auth/login", (req: Request, res: Response) => {
+  try {
+    const user = userService.login(req.body);
+    const token = generateAuthToken(user.userId, user.username);
 
-// Get claims by policy number (specific routes before generic :id route)
-app.get("/api/claims/policy/:policyNumber", (req: Request, res: Response) => {
-  const claims = claimService.getClaimsByPolicy(req.params.policyNumber);
-  res.json({ success: true, data: claims });
-});
-
-// Get claims by claimant name (specific routes before generic :id route)
-app.get("/api/claims/claimant/:claimantName", (req: Request, res: Response) => {
-  const claims = claimService.getClaimsByClaimant(req.params.claimantName);
-  res.json({ success: true, data: claims });
-});
-
-// Get claim by ID (generic route last)
-app.get("/api/claims/:claimId", (req: Request, res: Response) => {
-  const claim = claimService.getClaimById(req.params.claimId);
-  if (!claim) {
-    res.status(404).json({ success: false, error: "Claim not found" });
-  } else {
-    res.json({ success: true, data: claim });
+    res.json({
+      success: true,
+      message: "Login successful",
+      user: {
+        userId: user.userId,
+        username: user.username,
+        email: user.email,
+        fullName: user.fullName,
+        role: user.role,
+      },
+      token,
+    });
+  } catch (error) {
+    if (error instanceof ValidationError) {
+      res.status(401).json({ success: false, error: error.message });
+    } else {
+      res.status(500).json({ success: false, error: "Internal server error" });
+    }
   }
 });
 
-// Update claim (edit details or status)
-app.put("/api/claims/:claimId", (req: Request, res: Response) => {
-  try {
-    // Check if it's a status update or an edit request
-    const { status, claimantName, policyNumber, claimAmount } = req.body;
+// ==================== Admin Routes ====================
 
-    let claim;
-    if (status) {
-      // Update status
-      claim = claimService.updateClaimStatus(req.params.claimId, status as ClaimStatus);
-    } else if (claimantName || policyNumber || claimAmount !== undefined) {
-      // Edit claim details
-      claim = claimService.editClaim(req.params.claimId, {
-        claimantName,
-        policyNumber,
-        claimAmount,
-      });
-    } else {
-      res
-        .status(400)
-        .json({
+// Get admin dashboard stats
+app.get(
+  "/api/admin/dashboard",
+  authMiddleware,
+  requireRole([UserRole.ADMIN, UserRole.CLAIMS_ADJUSTER]),
+  (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const allClaims = claimService.getAllClaims();
+
+      const stats = {
+        totalClaims: allClaims.length,
+        pendingClaims: allClaims.filter((c) => c.status === ClaimStatus.PENDING).length,
+        approvedClaims: allClaims.filter((c) => c.status === ClaimStatus.APPROVED).length,
+        rejectedClaims: allClaims.filter((c) => c.status === ClaimStatus.REJECTED).length,
+        closedClaims: allClaims.filter((c) => c.status === ClaimStatus.CLOSED).length,
+        totalClaimAmount: allClaims.reduce((sum, c) => sum + c.claimAmount, 0),
+        approvedAmount: allClaims
+          .filter((c) => c.status === ClaimStatus.APPROVED)
+          .reduce((sum, c) => sum + (c.adjustedAmount || c.claimAmount), 0),
+        claimsByType: {
+          auto: allClaims.filter((c) => c.claimType === ClaimType.AUTO).length,
+          property: allClaims.filter((c) => c.claimType === ClaimType.PROPERTY).length,
+          health: allClaims.filter((c) => c.claimType === ClaimType.HEALTH).length,
+        },
+      };
+
+      res.json({ success: true, data: stats });
+    } catch (error) {
+      console.error("Dashboard error:", error);
+      res.status(500).json({ success: false, error: "Internal server error" });
+    }
+  }
+);
+
+// Get all claims (admin view)
+app.get(
+  "/api/admin/claims",
+  authMiddleware,
+  requireRole([UserRole.ADMIN, UserRole.CLAIMS_ADJUSTER]),
+  (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const claims = claimService.getAllClaims();
+      res.json({ success: true, data: claims });
+    } catch (error) {
+      res.status(500).json({ success: false, error: "Internal server error" });
+    }
+  }
+);
+
+// Get claims by status (admin)
+app.get(
+  "/api/admin/claims/status/:status",
+  authMiddleware,
+  requireRole([UserRole.ADMIN, UserRole.CLAIMS_ADJUSTER]),
+  (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const status = req.params.status as ClaimStatus;
+      const claims = claimService.getClaimsByStatus(status);
+      res.json({ success: true, data: claims });
+    } catch (error) {
+      res.status(500).json({ success: false, error: "Internal server error" });
+    }
+  }
+);
+
+// Approve claim (admin only)
+app.put(
+  "/api/admin/claims/:claimId/approve",
+  authMiddleware,
+  requirePermission(Permission.APPROVE_CLAIM),
+  (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const claim = claimService.approveClaim(req.params.claimId, req.user?.userId);
+      if (!claim) {
+        res.status(404).json({ success: false, error: "Claim not found" });
+      } else {
+        res.json({ success: true, data: claim, message: "Claim approved successfully" });
+      }
+    } catch (error) {
+      res.status(500).json({ success: false, error: "Internal server error" });
+    }
+  }
+);
+
+// Reject claim (admin only)
+app.put(
+  "/api/admin/claims/:claimId/reject",
+  authMiddleware,
+  requirePermission(Permission.REJECT_CLAIM),
+  (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const claim = claimService.rejectClaim(req.params.claimId, req.body);
+      if (!claim) {
+        res.status(404).json({ success: false, error: "Claim not found" });
+      } else {
+        res.json({ success: true, data: claim, message: "Claim rejected successfully" });
+      }
+    } catch (error) {
+      if (error instanceof ValidationError) {
+        res.status(400).json({ success: false, error: error.message });
+      } else {
+        res.status(500).json({ success: false, error: "Internal server error" });
+      }
+    }
+  }
+);
+
+// Adjust claim (admin only)
+app.put(
+  "/api/admin/claims/:claimId/adjust",
+  authMiddleware,
+  requirePermission(Permission.ADJUST_CLAIM),
+  (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const claim = claimService.adjustClaim(req.params.claimId, req.body);
+      if (!claim) {
+        res.status(404).json({ success: false, error: "Claim not found" });
+      } else {
+        res.json({ success: true, data: claim, message: "Claim adjusted successfully" });
+      }
+    } catch (error) {
+      if (error instanceof ValidationError) {
+        res.status(400).json({ success: false, error: error.message });
+      } else {
+        res.status(500).json({ success: false, error: "Internal server error" });
+      }
+    }
+  }
+);
+
+// ==================== Claim Routes ====================
+
+// Create a new claim
+app.post(
+  "/api/claims",
+  authMiddleware,
+  requirePermission(Permission.CREATE_CLAIM),
+  (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const claim = claimService.initiateClaim(req.body, req.user?.userId);
+      res.status(201).json({ success: true, data: claim });
+    } catch (error) {
+      if (error instanceof ValidationError) {
+        res.status(400).json({ success: false, error: error.message });
+      } else {
+        res.status(500).json({ success: false, error: "Internal server error" });
+      }
+    }
+  }
+);
+
+// Get all claims
+app.get(
+  "/api/claims",
+  authMiddleware,
+  requirePermission(Permission.VIEW_CLAIM),
+  (req: AuthenticatedRequest, res: Response) => {
+    try {
+      let claims;
+
+      // If user is admin/adjuster, show all claims. Otherwise show only their claims.
+      if (
+        userService.hasRole(req.user!, [UserRole.ADMIN, UserRole.CLAIMS_ADJUSTER])
+      ) {
+        claims = claimService.getAllClaims();
+      } else {
+        claims = claimService.getClaimsByUserId(req.user!.userId);
+      }
+
+      res.json({ success: true, data: claims });
+    } catch (error) {
+      res.status(500).json({ success: false, error: "Internal server error" });
+    }
+  }
+);
+
+// Get claims by policy number
+app.get(
+  "/api/claims/policy/:policyNumber",
+  authMiddleware,
+  requirePermission(Permission.VIEW_CLAIM),
+  (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const claims = claimService.getClaimsByPolicy(req.params.policyNumber);
+      res.json({ success: true, data: claims });
+    } catch (error) {
+      res.status(500).json({ success: false, error: "Internal server error" });
+    }
+  }
+);
+
+// Get claims by claimant name
+app.get(
+  "/api/claims/claimant/:claimantName",
+  authMiddleware,
+  requirePermission(Permission.VIEW_CLAIM),
+  (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const claims = claimService.getClaimsByClaimant(req.params.claimantName);
+      res.json({ success: true, data: claims });
+    } catch (error) {
+      res.status(500).json({ success: false, error: "Internal server error" });
+    }
+  }
+);
+
+// Get claim by ID
+app.get(
+  "/api/claims/:claimId",
+  authMiddleware,
+  requirePermission(Permission.VIEW_CLAIM),
+  (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const claim = claimService.getClaimById(req.params.claimId);
+      if (!claim) {
+        res.status(404).json({ success: false, error: "Claim not found" });
+      } else {
+        res.json({ success: true, data: claim });
+      }
+    } catch (error) {
+      res.status(500).json({ success: false, error: "Internal server error" });
+    }
+  }
+);
+
+// Update claim (edit details)
+app.put(
+  "/api/claims/:claimId",
+  authMiddleware,
+  requirePermission(Permission.EDIT_CLAIM),
+  (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { status, claimantName, policyNumber, claimAmount } = req.body;
+
+      let claim;
+      if (status) {
+        claim = claimService.updateClaimStatus(req.params.claimId, status as ClaimStatus);
+      } else if (claimantName || policyNumber || claimAmount !== undefined) {
+        claim = claimService.editClaim(req.params.claimId, {
+          claimantName,
+          policyNumber,
+          claimAmount,
+        });
+      } else {
+        res.status(400).json({
           success: false,
           error:
             "Either status or claim details (claimantName, policyNumber, claimAmount) must be provided",
         });
-      return;
-    }
+        return;
+      }
 
-    if (!claim) {
-      res.status(404).json({ success: false, error: "Claim not found" });
-    } else {
-      res.json({ success: true, data: claim });
-    }
-  } catch (error) {
-    if (error instanceof ValidationError) {
-      res.status(400).json({ success: false, error: error.message });
-    } else {
-      res.status(500).json({ success: false, error: "Internal server error" });
+      if (!claim) {
+        res.status(404).json({ success: false, error: "Claim not found" });
+      } else {
+        res.json({ success: true, data: claim });
+      }
+    } catch (error) {
+      if (error instanceof ValidationError) {
+        res.status(400).json({ success: false, error: error.message });
+      } else {
+        res.status(500).json({ success: false, error: "Internal server error" });
+      }
     }
   }
-});
-
-// Approve a claim
-app.put("/api/claims/:claimId/approve", (req: Request, res: Response) => {
-  const claim = claimService.approveClaim(req.params.claimId);
-  if (!claim) {
-    res.status(404).json({ success: false, error: "Claim not found" });
-  } else {
-    res.json({ success: true, data: claim, message: "Claim approved successfully" });
-  }
-});
-
-// Reject a claim
-app.put("/api/claims/:claimId/reject", (req: Request, res: Response) => {
-  const claim = claimService.rejectClaim(req.params.claimId);
-  if (!claim) {
-    res.status(404).json({ success: false, error: "Claim not found" });
-  } else {
-    res.json({ success: true, data: claim, message: "Claim rejected successfully" });
-  }
-});
+);
 
 // Health check
 app.get("/health", (req: Request, res: Response) => {

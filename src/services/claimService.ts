@@ -1,43 +1,47 @@
-import { IClaim, ICreateClaimRequest, IEditClaimRequest, ClaimStatus, ClaimType } from "../types/claim";
+import { IClaim, ICreateClaimRequest, IEditClaimRequest, ClaimStatus, ClaimType, IRejectClaimRequest, IAdjustClaimRequest } from "../types/claim";
 import { validateClaimRequest, validateEditClaimRequest, ValidationError } from "../utils/validation";
+import { database } from "./database";
 
 /**
  * ClaimService handles the creation and management of claims
  */
 export class ClaimService {
-  private claims: Map<string, IClaim> = new Map();
-  private claimCounters: Map<ClaimType, number> = new Map([
-    [ClaimType.AUTO, 0],
-    [ClaimType.PROPERTY, 0],
-    [ClaimType.HEALTH, 0],
-  ]);
+  /**
+   * Generate next claim ID based on existing claims
+   */
+  private generateClaimId(claimType: ClaimType): string {
+    const claims = database.getAllClaims();
+    const typePrefix = `CLM-${claimType.toUpperCase()}`;
+    const typeClaims = claims.filter((c) => c.claimId.startsWith(typePrefix));
+    const counter = typeClaims.length + 1;
+    return `${typePrefix}-${String(counter).padStart(4, "0")}`;
+  }
 
   /**
    * Initiates a new claim
    * @param request - The claim creation request
+   * @param userId - The ID of the user creating the claim
    * @returns The created claim object
    * @throws ValidationError if validation fails or duplicate policy number exists
    */
-  public initiateClaim(request: ICreateClaimRequest): IClaim {
+  public initiateClaim(request: ICreateClaimRequest, userId?: string): IClaim {
     // Validate the request
     validateClaimRequest(request);
 
     // Check for duplicate policy number
     const trimmedPolicyNumber = request.policyNumber.trim();
-    const existingClaim = Array.from(this.claims.values()).find(
-      (claim) => claim.policyNumber.toLowerCase() === trimmedPolicyNumber.toLowerCase()
-    );
+    const existingClaim = database
+      .getClaimsByPolicy(trimmedPolicyNumber)
+      .find((c) => c.policyNumber.toLowerCase() === trimmedPolicyNumber.toLowerCase());
 
     if (existingClaim) {
       throw new ValidationError(
-        `A claim already exists for policy number "${trimmedPolicyNumber}". Policy number: ${existingClaim.claimId}, Status: ${existingClaim.status}`
+        `A claim already exists for policy number "${trimmedPolicyNumber}". Claim ID: ${existingClaim.claimId}, Status: ${existingClaim.status}`
       );
     }
 
-    // Generate unique claim ID with format: CLM-{TYPE}-{runningNumber}
-    const counter = this.claimCounters.get(request.claimType) || 0;
-    this.claimCounters.set(request.claimType, counter + 1);
-    const claimId = `CLM-${request.claimType.toUpperCase()}-${String(counter + 1).padStart(4, "0")}`;
+    // Generate unique claim ID
+    const claimId = this.generateClaimId(request.claimType);
     const now = new Date();
 
     // Create the claim object
@@ -47,13 +51,14 @@ export class ClaimService {
       policyNumber: trimmedPolicyNumber,
       claimType: request.claimType,
       claimAmount: request.claimAmount,
-      status: ClaimStatus.INITIATED,
+      status: ClaimStatus.PENDING,
       createdAt: now,
       updatedAt: now,
+      userId: userId,
     };
 
     // Store the claim
-    this.claims.set(claimId, claim);
+    database.saveClaim(claim);
 
     return claim;
   }
@@ -64,7 +69,8 @@ export class ClaimService {
    * @returns The claim object or undefined if not found
    */
   public getClaimById(claimId: string): IClaim | undefined {
-    return this.claims.get(claimId);
+    const claim = database.getClaimById(claimId);
+    return claim || undefined;
   }
 
   /**
@@ -73,10 +79,7 @@ export class ClaimService {
    * @returns Array of claims for that policy
    */
   public getClaimsByPolicy(policyNumber: string): IClaim[] {
-    const policyLower = policyNumber.toLowerCase();
-    return Array.from(this.claims.values()).filter(
-      (claim) => claim.policyNumber.toLowerCase() === policyLower
-    );
+    return database.getClaimsByPolicy(policyNumber);
   }
 
   /**
@@ -85,10 +88,37 @@ export class ClaimService {
    * @returns Array of claims for that claimant
    */
   public getClaimsByClaimant(claimantName: string): IClaim[] {
+    const claims = database.getAllClaims();
     const nameLower = claimantName.toLowerCase();
-    return Array.from(this.claims.values()).filter(
+    return claims.filter(
       (claim) => claim.claimantName.toLowerCase() === nameLower
     );
+  }
+
+  /**
+   * Retrieves all claims
+   * @returns Array of all claims
+   */
+  public getAllClaims(): IClaim[] {
+    return database.getAllClaims();
+  }
+
+  /**
+   * Get claims by user ID
+   * @param userId - The user ID
+   * @returns Array of claims for that user
+   */
+  public getClaimsByUserId(userId: string): IClaim[] {
+    return database.getClaimsByUserId(userId);
+  }
+
+  /**
+   * Get claims by status
+   * @param status - The claim status
+   * @returns Array of claims with that status
+   */
+  public getClaimsByStatus(status: ClaimStatus): IClaim[] {
+    return database.getClaimsByStatus(status);
   }
 
   /**
@@ -98,13 +128,14 @@ export class ClaimService {
    * @returns The updated claim or undefined if not found
    */
   public updateClaimStatus(claimId: string, status: ClaimStatus): IClaim | undefined {
-    const claim = this.claims.get(claimId);
+    const claim = database.getClaimById(claimId);
     if (!claim) {
       return undefined;
     }
 
     claim.status = status;
     claim.updatedAt = new Date();
+    database.saveClaim(claim);
     return claim;
   }
 
@@ -116,7 +147,7 @@ export class ClaimService {
    * @throws ValidationError if validation fails
    */
   public editClaim(claimId: string, request: IEditClaimRequest): IClaim | undefined {
-    const claim = this.claims.get(claimId);
+    const claim = database.getClaimById(claimId);
     if (!claim) {
       return undefined;
     }
@@ -138,47 +169,74 @@ export class ClaimService {
     }
 
     claim.updatedAt = new Date();
+    database.saveClaim(claim);
     return claim;
   }
 
   /**
    * Approves a claim (sets status to APPROVED)
    * @param claimId - The claim ID
+   * @param adminId - The ID of the admin approving the claim
    * @returns The approved claim or undefined if not found
    */
-  public approveClaim(claimId: string): IClaim | undefined {
-    const claim = this.claims.get(claimId);
+  public approveClaim(claimId: string, adminId?: string): IClaim | undefined {
+    const claim = database.getClaimById(claimId);
     if (!claim) {
       return undefined;
     }
 
     claim.status = ClaimStatus.APPROVED;
+    claim.approvedBy = adminId;
+    claim.approvalDate = new Date();
     claim.updatedAt = new Date();
+    database.saveClaim(claim);
     return claim;
   }
 
   /**
-   * Rejects a claim (sets status to REJECTED)
+   * Rejects a claim with reason (sets status to REJECTED)
    * @param claimId - The claim ID
+   * @param request - The rejection request with reason
    * @returns The rejected claim or undefined if not found
    */
-  public rejectClaim(claimId: string): IClaim | undefined {
-    const claim = this.claims.get(claimId);
+  public rejectClaim(claimId: string, request: IRejectClaimRequest): IClaim | undefined {
+    const claim = database.getClaimById(claimId);
     if (!claim) {
       return undefined;
     }
 
+    if (!request.rejectionReason || request.rejectionReason.trim().length === 0) {
+      throw new ValidationError("Rejection reason is required");
+    }
+
     claim.status = ClaimStatus.REJECTED;
+    claim.rejectionReason = request.rejectionReason;
     claim.updatedAt = new Date();
+    database.saveClaim(claim);
     return claim;
   }
 
   /**
-   * Gets all claims
-   * @returns Array of all claims
+   * Adjusts a claim amount (for admin use)
+   * @param claimId - The claim ID
+   * @param request - The adjustment request
+   * @returns The adjusted claim or undefined if not found
    */
-  public getAllClaims(): IClaim[] {
-    return Array.from(this.claims.values());
+  public adjustClaim(claimId: string, request: IAdjustClaimRequest): IClaim | undefined {
+    const claim = database.getClaimById(claimId);
+    if (!claim) {
+      return undefined;
+    }
+
+    if (request.adjustedAmount <= 0) {
+      throw new ValidationError("Adjusted amount must be greater than 0");
+    }
+
+    claim.adjustedAmount = request.adjustedAmount;
+    claim.adjustmentNotes = request.adjustmentNotes;
+    claim.updatedAt = new Date();
+    database.saveClaim(claim);
+    return claim;
   }
 
   /**
@@ -187,6 +245,11 @@ export class ClaimService {
    * @returns true if deleted, false if not found
    */
   public deleteClaim(claimId: string): boolean {
-    return this.claims.delete(claimId);
+    const claim = database.getClaimById(claimId);
+    if (!claim) {
+      return false;
+    }
+    database.deleteClaim(claimId);
+    return true;
   }
 }
